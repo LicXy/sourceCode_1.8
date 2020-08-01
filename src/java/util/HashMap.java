@@ -728,7 +728,7 @@ public class HashMap<K,V> extends AbstractMap<K,V>
              * 红黑树节点处理
              */
             else if (p instanceof TreeNode)
-                e = ((TreeNode<K,V>)p).putTreeVal(this, tab, hash, key, value);
+                e = ((TreeNode<K,V>)p).putTreeVal(this, tab, hash, key, value); //如果在红黑树中存在相同key的节点, 那么这里会返回该节点, 便于后面统一进行覆盖操作
             /**
              * 链表节点处理
              */
@@ -745,27 +745,42 @@ public class HashMap<K,V> extends AbstractMap<K,V>
                          * 因为在本次插入节点后, 链表的长度已经增长了1
                          */
                         if (binCount >= TREEIFY_THRESHOLD - 1)
-                            //符合调条件, 当前链表可能需要转为红黑树
+                            /**
+                             * 符合调条件, 当前链表可能需要转为红黑树
+                             */
                             treeifyBin(tab, hash);
                         break;
                     }
                     if (e.hash == hash && ((k = e.key) == key || (key != null && key.equals(k))))
+                        /**
+                         * 【当程序执行到这里】: 待插入节点与链表中的某个节点的key一致! 因为在并发场景中, 可能在插入新节点之前其他线程已经插入了一个与当前节点相同key的节点,
+                         * 为了保证hashmap中key的唯一性, 所以需要做最后的校验
+                         */
                         break;
                     p = e;
-                }
+                } //for
             }
+            /**
+             * 【当程序执行到这里】: 如果e不为null, 那么说明在hashmap中存在于待插入的节点相同的key, 那么只需要覆盖该节点的value值即可
+             */
             if (e != null) { // existing mapping for key
                 V oldValue = e.value;
                 if (!onlyIfAbsent || oldValue == null)
+                    /**
+                     * 如果允许覆盖旧的value 或者 旧的value为bull 才会进行覆盖
+                     */
                     e.value = value;
-                afterNodeAccess(e);
-                return oldValue;
+                afterNodeAccess(e);  //linkedHashMap实现
+                return oldValue; //返回覆盖的旧value值
             }
         }
         ++modCount;
+        /**
+         * 在添加新的元素后, 判断是否超过阈值, 如果超过, 则进行扩容
+         */
         if (++size > threshold)
             resize();
-        afterNodeInsertion(evict);
+        afterNodeInsertion(evict);//linkedHashMap实现
         return null;
     }
 
@@ -2258,7 +2273,7 @@ public class HashMap<K,V> extends AbstractMap<K,V>
                     dir = 1;
                 /**
                  *  如果新增节点key的hash值与当前节点的hash值相等, 那么需要比较key是否相同(比较两个key的地址以及 使用equals方法判定); 如果相同, 则返回该节点
-                 *  【注意】:此处没有覆盖操作
+                 *  【注意】:此处没有覆盖操作, 这里仅仅返回重复节点, 在putVal方法中后面会统一进行覆盖value操作
                  */
                 else if ((pk = p.key) == k || (k != null && k.equals(pk)))
                     return p;
@@ -2535,54 +2550,152 @@ public class HashMap<K,V> extends AbstractMap<K,V>
         }
 
         /**
-         * 在红黑树插入节点后, 修复红黑树
+         *  在红黑树插入节点后, 修复红黑树的性质
+         *  root: 红黑树的新节点, x为新插入的节点
+         *
+         *【红黑树添加节点的12种情况】
+         * 一些节点的定义:
+         *      x:新增节点
+         *      xp:新增节点的父节点
+         *      xu: 新增节点的叔叔节点
+         *      xpp:新增节点的祖父节点
+         *      xppl:新增节点的祖父节点的左子节点 (新增节点的父节点或者叔叔节点)
+         *      xppr:新增节点的祖父节点的右子节点 (新增节点的父节点或者叔叔节点)
+         *
+         * 【1】  xp节点为黑色, xp节点度为 0, x节点为左子节点  ==> 无需调整
+         * 【2】  xp节点为黑色, xp节点度为 0, x节点为右子节点  ==> 无需调整
+         * 【3】  xp节点为黑色, xp节点度为 1, x节点为左子节点  ==> 无需调整
+         * 【4】  xp节点为黑色, xp节点度为 1, x节点为右子节点  ==> 无需调整
+         *                                                                                               注意:这里的xp节点为旋转之后的xp节点, x节点为旋转之后的x节点
+         * 【5】  xp节点为红色, xp节点度为 0, xp节点为(左)子节点, xpp节点为黑色, xpp节点度为 (1), x节点为(左)子节点  ==> xp节点右旋转, xp染为黑色, xpp染为红色
+         * 【6】  xp节点为红色, xp节点度为 0, xp节点为(左)子节点, xpp节点为黑色, xpp节点度为 (1), x节点为(右)子节点  ==> xp节点先左旋转, 再右旋转, x染为黑色, xpp染为红色
+         * 【7】  xp节点为红色, xp节点度为 0, xp节点为(右)子节点, xpp节点为黑色, xpp节点度为 (1), x节点为(左)子节点  ==> xp节点先右旋转, 再左旋转, x染为黑色, xpp染为红色
+         * 【8】  xp节点为红色, xp节点度为 0, xp节点为(右)子节点, xpp节点为黑色, xpp节点度为 (1), x节点为(右)子节点  ==> xp节点左旋转, xp染为黑色, xpp染为红色
+         *
+         * 【9】  xp节点为红色, xp节点度为 0, xp节点为(左)子节点, xpp节点为黑色, xpp节点度为 (2), x节点为(左)子节点  ==> xp染为黑色, xu染为黑色, xpp染为红色, 然后以 xpp为新增节点x继续修复红黑树性质
+         * 【10】 xp节点为红色, xp节点度为 0, xp节点为(左)子节点, xpp节点为黑色, xpp节点度为 (2), x节点为(右)子节点  ==> xp染为黑色, xu染为黑色, xpp染为红色, 然后以 xpp为新增节点x继续修复红黑树性质
+         * 【11】 xp节点为红色, xp节点度为 0, xp节点为(右)子节点, xpp节点为黑色, xpp节点度为 (2), x节点为(左)子节点  ==> xp染为黑色, xu染为黑色, xpp染为红色, 然后以 xpp为新增节点x继续修复红黑树性质
+         * 【12】 xp节点为红色, xp节点度为 0, xp节点为(右)子节点, xpp节点为黑色, xpp节点度为 (2), x节点为(右)子节点  ==> xp染为黑色, xu染为黑色, xpp染为红色, 然后以 xpp为新增节点x继续修复红黑树性质
+         *
+         * ##为什么没有父节点为黑色, 父节点度为 2的情况 ?
+         *  因为如果父节点为2, 那么还哪还有位置插入新的节点... 红黑树也是一个二叉树
+         *
+         * ##为什么没有父节点为红色, 父节点度不为 0 的情况 ?
+         *  因为如果父节点为红色,且度不为 0, 那么这棵红黑树将不满足性质4 "RED节点的子节点都是BLACK"
+         *  具体原因可以按照红黑树推导4阶B树分析:
+         *       如果父节点为红色, 那么该节点将跟它的黑色节点合为一个B树节点, 如果 父节点为红色,且度不为 0, 那么红黑树将无法推导为一个标准的4阶B树
          */
         static <K,V> TreeNode<K,V> balanceInsertion(TreeNode<K,V> root, TreeNode<K,V> x) {
-            x.red = true;  //默认插入的新节点为红色 (为什么是红色呢? 因为默认为红色,可以满足红黑树五大性质中的四条,"RED节点的子节点都是BLACK" 这条除外)
+            /**
+             * 默认插入的新节点为红色
+             * 为什么是红色呢 ?
+             *   因为默认为红色,可以满足红黑树五大性质中的四条,"RED节点的子节点都是BLACK" 这条除外
+             */
+            x.red = true;
             for (TreeNode<K,V> xp, xpp, xppl, xppr;;) {
+                /**
+                 * xp:新增节点的父节点
+                 * xu:新增节点的叔叔节点
+                 * xpp:新增节点的祖父节点
+                 * xppl:新增节点的祖父节点的左子节点 (新增节点的父节点或者叔叔节点)
+                 * xppr:新增节点的祖父节点的右子节点 (新增节点的父节点或者叔叔节点)
+                 */
                 if ((xp = x.parent) == null) {
-                    x.red = false;
+                    x.red = false; //如果新增节点的父节点为空, 那么新增节点为根节点, 红黑树中根节点必须为黑色, 直接返回即可
                     return x;
                 }
+                /**
+                 * 添加节点不为根节点情况
+                 */
                 else if (!xp.red || (xpp = xp.parent) == null)
+                    /**
+                     * xp节点为黑色, 或者父节点为root节点(黑色), 不需要调整
+                     *  情况:【1】【2】【3】【4】
+                     */
                     return root;
+
                 if (xp == (xppl = xpp.left)) {
+                    /**
+                     * xp节点为左子节点
+                     */
                     if ((xppr = xpp.right) != null && xppr.red) {
-                        xppr.red = false;
-                        xp.red = false;
-                        xpp.red = true;
-                        x = xpp;
+                        /**
+                         * [xp节点为左子节点], xpp节点的度为 2, xu节点为红色
+                         * 注意: 此时xu节点必为红色, 如果为黑色,则该红黑树将不满则性质"从任一节点到叶子节点的所有路径都包含相同数目的 BLACK节点"
+                         * 情况:【9】【10】
+                         */
+                        xppr.red = false;  //xu节点染为黑色
+                        xp.red = false;    //父节点染为黑色
+                        xpp.red = true;    // 祖父节点染为红色
+                        x = xpp;    // 将xpp节点当做新增节点,调整红黑树平衡 (4阶B树中的上溢)
                     }
                     else {
+                        /**
+                         * [xp节点为左子节点], xpp节点的度为 1
+                         * 情况【6】
+                         */
                         if (x == xp.right) {
-                            root = rotateLeft(root, x = xp);
+                            /**
+                             * [xp节点为左子节点, xpp节点的度为 1], x节点为右子节点(1)  ==>左旋转
+                             */
+                            root = rotateLeft(root, x = xp);  //先进行左旋转
+                            //左旋之后,需要更新xp和xpp的引用节点为: 现xp节点为原x节点, 现x节点为原xp节点, xpp节点为现xp节点(原x节点)的父节点
                             xpp = (xp = x.parent) == null ? null : xp.parent;
                         }
+
+
                         if (xp != null) {
-                            xp.red = false;
+                            /**
+                             * [xp节点为左子节点, xpp节点的度为 1], x节点为左子节点
+                             * 情况:【5】
+                             * [xp节点为左子节点, xpp节点的度为 1], x节点为右子节点(2)  ==>右旋转
+                             * 情况:【6】
+                             */
+                            xp.red = false;               //xp节点(原x节点)染为黑色
                             if (xpp != null) {
-                                xpp.red = true;
-                                root = rotateRight(root, xpp);
+                                xpp.red = true;           //xpp节点染为红色
+                                root = rotateRight(root, xpp);  //再进行右旋转
                             }
                         }
-                    }
+                    } //else
                 }
+
+                /**
+                 * xp节点为右子节点
+                 */
                 else {
                     if (xppl != null && xppl.red) {
-                        xppl.red = false;
-                        xp.red = false;
-                        xpp.red = true;
-                        x = xpp;
+                        /**
+                         * [xp节点为右子节点], xpp节点度为 2, xu节点为红色
+                         * 情况【11】【12】
+                         */
+                        xppl.red = false;  //xu节点染为黑色
+                        xp.red = false;    //xp节点然为黑色
+                        xpp.red = true;    //xpp染为红色
+                        x = xpp;   // 将xpp节点当做新增节点,调整红黑树平衡 (4阶B树中的上溢)
                     }
                     else {
+                        /**
+                         * [xp节点为右子节点], xpp节点度为 1
+                         */
                         if (x == xp.left) {
-                            root = rotateRight(root, x = xp);
+                            /**
+                             * [xp节点为右子节点, xpp节点度为 1], x节点为左子节点(1)
+                             */
+                            root = rotateRight(root, x = xp);  //右旋转
+                            //右旋之后,需要更新xp和xpp的引用节点为: 现xp节点为原x节点, 现x节点为原xp节点, xpp节点为现xp节点(原x节点)的父节点
                             xpp = (xp = x.parent) == null ? null : xp.parent;
                         }
                         if (xp != null) {
-                            xp.red = false;
+                            /**
+                             *  [xp节点为右子节点, xpp节点度为 1], x节点为右子节点
+                             *  情况:【8】
+                             *  [xp节点为右子节点, xpp节点度为 1], x节点为左子节点(2)
+                             *  情况:【7】
+                             */
+                            xp.red = false;  // xp染为黑色
                             if (xpp != null) {
-                                xpp.red = true;
+                                xpp.red = true; //xpp染为红色
                                 root = rotateLeft(root, xpp);
                             }
                         }
@@ -2593,13 +2706,43 @@ public class HashMap<K,V> extends AbstractMap<K,V>
 
         /**
          * 在红黑树删除节点后, 修复红黑树
+         *
+         *【红黑树删除节点的8种情况】
+         * 一些节点的定义:
+         *      x:删除节点
+         *      xp:删除节点的父节点
+         *      xu: 删除节点的叔叔节点
+         *      xpr:删除节点的父节点
+         *      xpl:删除节点的父节点
+         *
+         * 【1】 x节点为红色, x节点为左子节点, xp节点的度为 1  ==>无需调整
+         * 【2】 x节点为红色, x节点为左子节点, xp节点的度为 2  ==>无需调整
+         * 【3】 x节点为红色, x节点为右子节点, xp节点的度为 1  ==>无需调整
+         * 【4】 x节点为红色, x节点为右子节点, xp节点的度为 2  ==>无需调整
+         *
+         * 【5】 x节点为黑色, x节点为左子节点, x节点的度为 1
+         * 【6】 x节点为黑色, x节点为左子节点, x节点的度为 2
+         * 【7】 x节点为黑色, x节点为右子节点, x节点的度为 1
+         * 【8】 x节点为黑色, x节点为右子节点, x节点的度为 0
+         *
+         * 为什么只有8种情况 ? 不是应该红黑树中的每一个节点都有可能会被删除的吗 ?
+         *   因为, 在红黑树中, 如果删除一个度为2的节点, 实际上删除的是它的前驱节点, 或者后继节点
+         *
          */
-        static <K,V> TreeNode<K,V> balanceDeletion(TreeNode<K,V> root,
-                                                   TreeNode<K,V> x) {
+        static <K,V> TreeNode<K,V> balanceDeletion(TreeNode<K,V> root, TreeNode<K,V> x) {
+            /**
+             * xp: 待删除节点的父节点
+             * xpl: 待删除节点的父节点的左子节点
+             * xpr: 待删除节点的父节点的右子节点
+             */
             for (TreeNode<K,V> xp, xpl, xpr;;)  {
                 if (x == null || x == root)
+                    /**
+                     * 如果待删除节点为根节点, 则无需调整
+                     */
                     return root;
                 else if ((xp = x.parent) == null) {
+
                     x.red = false;
                     return x;
                 }
@@ -2723,7 +2866,7 @@ public class HashMap<K,V> extends AbstractMap<K,V>
             if (tr != null && (tr.parent != t || tr.hash < t.hash))
                 return false;
             /**
-             * 6、当前节点是红色,孩子节点也是红色
+             * 6、当前节点是红色,孩子节点也是红色  ==>红黑树性质
              */
             if (t.red && tl != null && tl.red && tr != null && tr.red)
                 return false;
