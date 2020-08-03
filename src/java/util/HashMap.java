@@ -230,7 +230,7 @@ public class HashMap<K,V> extends AbstractMap<K,V>
      */
 
     /**
-     * The default initial capacity - MUST be a power of two.
+     * 默认初始化容量 - 必须为2的等次幂
      */
     static final int DEFAULT_INITIAL_CAPACITY = 1 << 4; // aka 16
 
@@ -238,6 +238,8 @@ public class HashMap<K,V> extends AbstractMap<K,V>
      * The maximum capacity, used if a higher value is implicitly specified
      * by either of the constructors with arguments.
      * MUST be a power of two <= 1<<30.
+     *
+     * 最大容量
      */
     static final int MAXIMUM_CAPACITY = 1 << 30;
 
@@ -423,6 +425,10 @@ public class HashMap<K,V> extends AbstractMap<K,V>
      * Returns a power of two size for the given target capacity.
      * 找到【大于等于】给定容量的最小2的次幂值
      * 例如: cap = 15, return 16;
+     * HashMap 中没有 capacity 属性,
+     * 初始化时，如果传了初始化容量值，该值是存在 threshold 变量，并且hash数组是在第一次 put 时才会进行初始化，
+     * 初始化时会将此时的 threshold 值作为新表的 capacity 值，然后用 capacity 和 loadFactor 计算新表的真正 threshold 值
+     * 而此方法就是根据threshold(临时作为capacity)计算出真正的capacity
      */
     static final int tableSizeFor(int cap) {
         int n = cap - 1;
@@ -448,7 +454,7 @@ public class HashMap<K,V> extends AbstractMap<K,V>
      * Holds cached entrySet(). Note that AbstractMap fields are used
      * for keySet() and values().
      */
-    transient Set<Map.Entry<K,V>> entrySet;  //??
+    transient Set<Map.Entry<K,V>> entrySet;  //存储set集合
 
     /**
      * The number of key-value mappings contained in this map.
@@ -564,7 +570,11 @@ public class HashMap<K,V> extends AbstractMap<K,V>
                 if (t > threshold)  //如果最小容量大于当前hash的阈值, 则更新阈值为大于等于当前容量的最小2的等次幂 例:s = 3, t = 5, threshold = 8
                     /**
                      * 此处的threshold为新hash表的最小容量, 后面threshold将赋给newCap, 而threshold将根据newCap * 0.75重新计算
-                     * 此处为什么要使用threshold来表示最小容量??
+                     * 此处为什么要使用threshold来表示最小容量?
+                     *   HashMap 有 threshold 属性和 loadFactor 属性，但是没有 capacity 属性。
+                     *   初始化时，如果传了初始化容量值，该值是存在 threshold 变量，
+                     *   并且 Node 数组是在第一次 put 时才会进行初始化，初始化时会将此时的 threshold 值作为新表的 capacity 值，
+                     *   然后用 capacity 和 loadFactor 计算新表的真正 threshold 值。
                      *
                      * Hash表的容量必须为2的等次幂, 所以此处需要计算大于等于期望容量的最小值
                      */
@@ -866,32 +876,44 @@ public class HashMap<K,V> extends AbstractMap<K,V>
                         ((TreeNode<K,V>)e).split(this, newTab, j, oldCap);
                     else { // 保持顺序
                         /**
-                         * 如果当前节点是链表节点
+                         * 如果当前节点是链表节点, 那么会根据索引位置将该链表拆为两个链表
                          */
-                        Node<K,V> loHead = null, loTail = null;  //lohead: 链表头节点, loTail链表尾节点
-                        Node<K,V> hiHead = null, hiTail = null;
+                        Node<K,V> loHead = null, loTail = null;  //链表1
+                        Node<K,V> hiHead = null, hiTail = null;  //链表2
                         Node<K,V> next;
                         do {
                             next = e.next;  //获取当前节点的下一个节点
+                            /**
+                             * 如果节点索引在扩容前后一致
+                             */
                             if ((e.hash & oldCap) == 0) {
-                                if (loTail == null)
-                                    loHead = e;
+                                if (loTail == null)  //如果链表未空
+                                    loHead = e;  //更新头节点
                                 else
-                                    loTail.next = e;
-                                loTail = e;
+                                    loTail.next = e;  //更新下一个节点
+                                loTail = e; //更新尾节点
                             }
+                            /**
+                             * 如果节点索引在扩容后为索引+旧容量
+                             */
                             else {
                                 if (hiTail == null)
-                                    hiHead = e;
+                                    hiHead = e;  //更新头节点
                                 else
-                                    hiTail.next = e;
-                                hiTail = e;
+                                    hiTail.next = e; //更新下一个节点
+                                hiTail = e;  //更新尾节点
                             }
                         } while ((e = next) != null);
+                        /**
+                         * 将lo链表放到对应的hash桶中
+                         */
                         if (loTail != null) {
                             loTail.next = null;
                             newTab[j] = loHead;
                         }
+                        /**
+                         * 将hi链表放到对应的hash桶中
+                         */
                         if (hiTail != null) {
                             hiTail.next = null;
                             newTab[j + oldCap] = hiHead;
@@ -2538,54 +2560,115 @@ public class HashMap<K,V> extends AbstractMap<K,V>
          * or untreeifies if now too small. Called only from resize;
          * see above discussion about split bits and indices.
          *
-         * @param map the map
-         * @param tab the table for recording bin heads
-         * @param index the index of the table being split
-         * @param bit the bit of hash to split on
+         * 在扩容后, 红黑树中的节点,只会存在于两个位置: 原索引的位置, 原索引+旧容量
+         * 为什么?
+         *   假设:
+         *   (1)某个节点key的hash值为 10(1010), hashMap旧容量为 4(100), 新容量为 8 (1000)
+         *   hash:     1010
+         *   oldCap-1:   11
+         *   oldIndex:   10
+         *
+         *   hash:     1010
+         *   newCap-1:  111
+         *   newIndex:  010
+         *
+         *   oldIndex == newIndex
+         *
+         *   (2)某个节点key的hash值为 14(1110), hashMap旧容量为 4(100), 新容量为 8 (1000)
+         *   hash:     1110
+         *   oldCap-1:   11
+         *   oldIndex:   10
+         *
+         *   hash:     1110
+         *   newCap-1:  111
+         *   newIndex:  110
+         *
+         *   oldIndex == newIndex + oldCap
+         *
+         *   如何判断索引是在原位置, 还是在原位置+oldCap呢?
+         *   在上面的两个例子中, 可以看出, 新的索引在哪个位置取决于hash表中oldCap容量的最高位对应hash值的那一位是 0 还是 1
+         *   也就是可以通过 hash与oldCap进行&运算, 可以计算出该位置是 0 还是 1, 如果是0, 则在原位置, 如果是1,则在原位置+oldCap
+         *
          */
         final void split(HashMap<K,V> map, Node<K,V>[] tab, int index, int bit) {
             //map: 当前hashmap对象, tab: 新的hash表, index:当前节点所在hash表中位置, bit:旧容量
             TreeNode<K,V> b = this;
             // Relink into lo and hi lists, 保持节点顺序
-            TreeNode<K,V> loHead = null, loTail = null;
-            TreeNode<K,V> hiHead = null, hiTail = null;
+            TreeNode<K,V> loHead = null, loTail = null;  //存储索引位置为"原索引位置"的节点  (注意链表的节点为TreeNode)
+            TreeNode<K,V> hiHead = null, hiTail = null;  //存储索引位置为"原索引位置+旧容量"的节点  (注意链表的节点为TreeNode)
             int lc = 0, hc = 0;
-            for (TreeNode<K,V> e = b, next; e != null; e = next) {
-                next = (TreeNode<K,V>)e.next;
-                e.next = null;
+            for (TreeNode<K,V> e = b, next; e != null; e = next) {  //遍历整个红黑树节点, 移动节点到新位置上
+                next = (TreeNode<K,V>)e.next;  // next为当前节点的下一个节点
+                e.next = null;  //先将当前节点的next属性置空
+                /**
+                 * 节点索引在扩容后前后一致
+                 */
                 if ((e.hash & bit) == 0) {
-                    if ((e.prev = loTail) == null)
-                        loHead = e;
+                    if ((e.prev = loTail) == null)  //如果loTail为空, 说明是第一个节点
+                        loHead = e;   //给头节点赋值
                     else
-                        loTail.next = e;
-                    loTail = e;
-                    ++lc;
+                        loTail.next = e;  //向链表尾部添加节点
+                    loTail = e;  //更新链表尾部节点
+                    ++lc;  //统计原索引位置节点的数量
                 }
+                /**
+                 * 节点索引在扩容后, 新的位置为原位置+旧容量
+                 */
                 else {
-                    if ((e.prev = hiTail) == null)
-                        hiHead = e;
+                    if ((e.prev = hiTail) == null) //如果hiTail为空, 说明是第一个节点
+                        hiHead = e;   //给头节点赋值
                     else
-                        hiTail.next = e;
-                    hiTail = e;
-                    ++hc;
+                        hiTail.next = e;    //向链表尾部添加节点
+                    hiTail = e;  //更新链表尾部节点
+                    ++hc;   //统计新索引位置节点的数量
                 }
-            }
+            }//for
 
+            /**
+             * 【当程序执行到这里】: 原红黑树已经拆分为两个链表, 如果链表不为null, 那么该链表将更新到hash桶对应位置上
+             *  接下来需要根据每个链表的长度, 判断时候需要将红黑树装化为链表;
+             */
             if (loHead != null) {
                 if (lc <= UNTREEIFY_THRESHOLD)
+                    /**
+                     * 如果链表长度小于等于UNTREEIFY_THRESHOLD, 那么不需要转为红黑树, 保持为链表即可
+                     * 那为什么这里调用了红黑树的untreeify方法, 因为在上面维护两个链表的节点是TreeNode, 这里需要转为链表节点Node, 节省内存使用
+                     */
                     tab[index] = loHead.untreeify(map);
                 else {
+                    /**
+                     * 该链表需要转为红黑树, 那么先将链表赋给对应的hash桶中
+                     */
                     tab[index] = loHead;
-                    if (hiHead != null) // (else is already treeified)
+                    if (hiHead != null)
+                        /**
+                         * 如果hiHead不为null, 才会转为红黑树
+                         * 因为, 如果hi链表为null, 说明在扩容前后, 红黑树上节点的位置在红黑树中没有发生任何改变, 并且该红黑树仍然在原hash桶位置
+                         *      如果hi链表不为null, 说明hi链表分走了一部分节点, 但是hi链表仍然没有到达转为链表的条件, 所以需要转为红黑树
+                         */
                         loHead.treeify(tab);
                 }
             }
+            /**
+             * 处理hi链表
+             */
             if (hiHead != null) {
                 if (hc <= UNTREEIFY_THRESHOLD)
+                    /**
+                     * 如果链表长度小于等于UNTREEIFY_THRESHOLD, 那么不需要转为红黑树, 保持为链表即可
+                     * 那为什么这里调用了红黑树的untreeify方法, 因为在上面维护两个链表的节点是TreeNode, 这里需要转为链表节点Node, 节省内存使用
+                     *
+                     * 更新链表位置在索引+旧容量
+                     */
                     tab[index + bit] = hiHead.untreeify(map);
                 else {
                     tab[index + bit] = hiHead;
                     if (loHead != null)
+                        /**
+                         * 如果loHead不为null, 才会转为红黑树
+                         * 因为: 如果lo链表为null, 说明在扩容前后, 红黑树上节点的位置在红黑树中没有发生任何改变, 仅需要修改根节点在hash桶中的位置,
+                         *       如果lo链表不为null, 说明lo链表分走了一部分节点, 但是hi链表仍然没有到达转为链表的条件, 所以需要转为红黑树
+                         */
                         hiHead.treeify(tab);
                 }
             }
